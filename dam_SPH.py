@@ -25,9 +25,9 @@ g = np.array([0.,-gravity])
 
 
 ################### Simulation Constants ###################
-num_parcels = 16 # Number of real parcels
-t_steps = 300  # Number of time steps in the simulation - with t_steps = 9000 & h = 0.0005 the simulation will cover 4.5 seconds
-h = 0.005      # Time discretization 
+num_parcels = 100 # Number of real parcels
+t_steps = 3000 # Number of time steps in the simulation - with t_steps = 9000 & h = 0.0005 the simulation will cover 4.5 seconds
+h = 0.0005      # Time discretization 
 
 reservior_length = int(25./54.*num_parcels**(0.5)) # 25x25 m square block of water is 54x54 parcels
 vertical_wall_height = 40                          # Height of left and right boundaries
