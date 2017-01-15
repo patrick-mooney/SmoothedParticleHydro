@@ -9,7 +9,7 @@ import matplotlib.cm as cm
 import time
 from math import sqrt, pi
 
-# Use Monaghan correction, Wendland localization, 
+# Use Monaghan correction, Wendland localization,
 # predictor-corrector numerical integration scheme
 # with artificial viscosity and repulsive boundary force
 
@@ -25,9 +25,9 @@ g = np.array([0.,-gravity])
 
 
 ################### Simulation Constants ###################
-num_parcels = 100 # Number of real parcels
-t_steps = 3000 # Number of time steps in the simulation - with t_steps = 9000 & h = 0.0005 the simulation will cover 4.5 seconds
-h = 0.0005      # Time discretization 
+num_parcels = 9 # Number of real parcels
+t_steps = 600 # Number of time steps in the simulation - with t_steps = 9000 & h = 0.0005 the simulation will cover 4.5 seconds
+h = 0.00005      # Time discretization
 
 reservior_length = int(25./54.*num_parcels**(0.5)) # 25x25 m square block of water is 54x54 parcels
 vertical_wall_height = 40                          # Height of left and right boundaries
@@ -121,7 +121,7 @@ def art_visc(xi, xj, ui, uj, ci, cj, roi, roj, sr, a , b):
 		muij = ( 2*sr*dot_xu ) / ( np.linalg.norm(dx)**2 + (0.2*sr)**2 )
 		#print( ( -a*cij*muij + b*muij**2 ) / roij )
 		return ( -a*cij*muij + b*muij**2 ) / roij
-	
+
 	return 0.
 
 
@@ -142,6 +142,18 @@ def mon_cor(i, coordinates, velocities, densities, co_indx, mc, mass, sr, neighb
 				/ (densities[i] + densities[j])
 
 		correction *= 2. * mc * mass
+
+	else:
+		for j in neighbors:
+			if i == j:
+				continue
+			s = np.linalg.norm(coordinates[i,:] - coordinates[j,:])
+			if s < sr:
+				correction += (velocities[i,co_indx] - velocities[j,co_indx]) * W_wendland(s, sr) \
+				/ (densities[i] + densities[j])
+
+		correction *= 2. * mc * mass
+
 	return velocities[i,co_indx] - correction
 
 
@@ -165,11 +177,26 @@ def  momentum_balance(i, co, u, dens, co_indx, mass, gravity, pr, c, sr, visc_a 
 			if j >= num_real_parcels and (s/d0) <= delta:
 				boundary_force += K * ( (s/d0)**(-0.5) * (delta - (s/d0))**2 * (1./(s*d0)) * (co[i,co_indx] - co[j,co_indx]) )
 
+	else:
+		for j in neighbors:
+			if i == j:
+				continue
+			s = np.linalg.norm(co[i,:] - co[j,:])
+			if s < sr:
+				artificial_viscosity = art_visc(co[i,:], co[j,:], u[i,:], u[j,:], c[i], c[j], dens[i], dens[j], sr, visc_a , visc_b)
+
+				sum += (W_prime_wendland(s, sr) / s) * ((pr[i]/dens[i]**2) + (pr[j]/dens[j]**2) + artificial_viscosity) \
+					* (co[i, co_indx] - co[j,co_indx])
+
+			# Boundary force
+			if j >= num_real_parcels and (s/d0) <= delta:
+				boundary_force += K * ( (s/d0)**(-0.5) * (delta - (s/d0))**2 * (1./(s*d0)) * (co[i,co_indx] - co[j,co_indx]) )
+
 
 	return gravity[co_indx] + (boundary_force/mass) - sum * mass
 
 
-# For particle i, update the density. Notice that even though this is 
+# For particle i, update the density. Notice that even though this is
 # the DE for density, no density term appears in this formulation
 def density_update(i, co, u, mass, sr):
 	sum = 0.
@@ -200,6 +227,105 @@ def pressure_update(press, dens, bulk_density, B, gamma):
 	return press
 
 
+# Construct neighbor list for parcel in cell (i,j) from linked_cell
+def neighbor_list(x, y, linked_cell, rightmost_cell, highest_cell, sr):
+	neigbors = []
+	i = int(x / sr)
+	j = int(y / sr)
+
+	# If parcel's cell is not a border cell
+	if (i != 0 and j != 0)  and  (i != rightmost_cell and j != highest_cell):
+		neighbors.extend(linked_cell[i-1][j-1]) # Southwest
+		neighbors.extend(linked_cell[i][j-1])   # South
+		neighbors.extend(linked_cell[i+1][j-1]) # Southeast
+		neighbors.extend(linked_cell[i-1][j])   # West
+		neighbors.extend(linked_cell[i][j])     # Self
+		neighbors.extend(linked_cell[i+1][j])   # East
+		neighbors.extend(linked_cell[i-1][j+1]) # Northwest
+		neighbors.extend(linked_cell[i][j+1])   # North
+		neighbors.extend(linked_cell[i+1][j+1]) # Northeast
+		return neighbors
+
+	# Lower left corner
+	if i == 0 and j == 0:
+		neighbors.extend(linked_cell[i][j])     # Self
+		neighbors.extend(linked_cell[i+1][j])   # East
+		neighbors.extend(linked_cell[i][j+1])   # North
+		neighbors.extend(linked_cell[i+1][j+1]) # Northeast
+		return neighbors
+
+	# Lower right corner
+	if i == rightmost_cell and j == 0:
+		neighbors.extend(linked_cell[i-1][j])   # West
+		neighbors.extend(linked_cell[i][j])     # Self
+		neighbors.extend(linked_cell[i-1][j+1]) # Northwest
+		neighbors.extend(linked_cell[i][j+1])   # North
+		return neighbors
+
+	# Floor (could be placed higher if corners are tested for)
+	if j == 0:
+		neighbors.extend(linked_cell[i-1][j])   # West
+		neighbors.extend(linked_cell[i][j])     # Self
+		neighbors.extend(linked_cell[i+1][j])   # East
+		neighbors.extend(linked_cell[i-1][j+1]) # Northwest
+		neighbors.extend(linked_cell[i][j+1])   # North
+		neighbors.extend(linked_cell[i+1][j+1]) # Northeast
+		return neighbors
+
+	# Top left corner
+	if i == 0 and j == highest_cell:
+		neighbors.extend(linked_cell[i][j-1])   # South
+		neighbors.extend(linked_cell[i+1][j-1]) # Southeast
+		neighbors.extend(linked_cell[i][j])     # Self
+		neighbors.extend(linked_cell[i+1][j])   # East
+		return neighbors
+
+	# Top right corner
+	if i == rightmost_cell and j == highest_cell:
+		neighbors.extend(linked_cell[i-1][j-1]) # Southwest
+		neighbors.extend(linked_cell[i][j-1])   # South
+		neighbors.extend(linked_cell[i-1][j])   # West
+		neighbors.extend(linked_cell[i][j])     # Self
+		return neighbors
+
+	# Left wall
+	if i == 0:
+		neighbors.extend(linked_cell[i][j-1])   # South
+		neighbors.extend(linked_cell[i+1][j-1]) # Southeast
+		neighbors.extend(linked_cell[i][j])     # Self
+		neighbors.extend(linked_cell[i+1][j])   # East
+		neighbors.extend(linked_cell[i][j+1])   # North
+		neighbors.extend(linked_cell[i+1][j+1]) # Northeast
+		return neighbors
+
+	# Right wall
+	if i == rightmost_cell:
+		neighbors.extend(linked_cell[i-1][j-1]) # Southwest
+		neighbors.extend(linked_cell[i][j-1])   # South
+		neighbors.extend(linked_cell[i-1][j])   # West
+		neighbors.extend(linked_cell[i][j])     # Self
+		neighbors.extend(linked_cell[i-1][j+1]) # Northwest
+		neighbors.extend(linked_cell[i][j+1])   # North
+		return neighbors
+
+	return neighbors
+
+
+
+def update_cells(coordinates, linked_cell, rightmost_cell, highest_cell, num_real_parcels, sr):
+	# Clean linked_cells so it may be filled again
+	for i in range(rightmost_cell+1):
+		for j in range(highest_cell+1):
+			while linked_cell[i][j] and (linked_cell[i][j][-1] < num_real_parcels):
+					linked_cell[i][j].pop()
+
+	# Fill linked_cell
+	for t in range(num_real_parcels):
+		i = int(coordinates[t,0] / sr)
+		j = int(coordinates[t,1] / sr)
+		linked_cell[i][j].append(t)
+
+	return linked_cell
 
 
 ################### Initializations ###################
@@ -209,7 +335,7 @@ coordinates = np.zeros((num_parcels,2))
 for i in range(int(sqrt(num_parcels))): # i is the vertical distance
 	for j in range(int(sqrt(num_parcels))): # j is the horizontal distance
 		coordinates[i*int(sqrt(num_parcels))+j,0] = (j+1)*initial_parcel_distance  # j+1 so the parcel isn't in boundary
-		coordinates[i*int(sqrt(num_parcels))+j,1] = (i+1)*initial_parcel_distance 
+		coordinates[i*int(sqrt(num_parcels))+j,1] = (i+1)*initial_parcel_distance
 
 
 # Initialize fictitious parcels along the walls and floor
@@ -287,6 +413,44 @@ new_coordinates = np.zeros((num_parcels,2))
 # plot_dam(coordinates, t_steps, num_parcels, river_length, vertical_wall_height)
 
 
+
+# Initialize neighbor lists
+num_x_cells = int(river_length / sr)
+num_y_cells = int(vertical_wall_height / sr)
+# Rightmost and highest hold indeces of their respective cells
+rightmost_cell = num_x_cells - 1
+highest_cell = num_y_cells - 1
+#linked_cell = np.zeros((num_x_cells, num_y_cells))
+# Note that linked_cell is a list of lists of lists!
+linked_cell = []
+for i in range(num_x_cells):
+	lst = [None] * num_y_cells
+	for j in range(num_y_cells):
+		lst[j] = []
+	linked_cell.append(lst)
+
+# First insert fictitous parcels from left wall and floor
+for t in range(num_parcels, (num_parcels + left_wall_fparcels.size/2 + floor_fparcels.size/2)):
+	i = int(coordinates[t,0] / sr)
+	j = int(coordinates[t,1] / sr)
+	linked_cell[i][j].append(t)
+
+# Right wall must be done seperately because its parcels otherwise would require an additional column
+# of linked cells. The additional column would be disadvantageous for the neighbor list scheme
+for t in range((num_parcels + left_wall_fparcels.size/2 + floor_fparcels.size/2), (coordinates.size/2)):
+	i = int(coordinates[t,0] / sr) - 1 # subtract one so that left wall parcels are within indices
+	j = int(coordinates[t,1] / sr)
+	linked_cell[i][j].append(t)
+
+# Allot real parcels to their initial cells
+for t in range(num_parcels):
+	i = int(coordinates[t,0] / sr)
+	j = int(coordinates[t,1] / sr)
+	linked_cell[i][j].append(t)
+
+neighbors = []
+
+
 # Set up for animation
 # Use initial_pr variables to scale pressure colormap in animation
 initial_pr_bottom = p_press[num_parcels] # pressure of bottom parcel in boundary
@@ -307,16 +471,17 @@ start_time = time.time()
 # INTEGRATION STARTUP ROUTINE
 # Use improved Euler to do the first time step by stepping twice by h/2
 for n in range(2):
-	# NOTE: This first inner for loop below is why we are doing this startup step at all. It is all to get these old_---_halves 
+	# NOTE: This first inner for loop below is why we are doing this startup step at all. It is all to get these old_---_halves
 	# to be used in the predictor corrector. In particular, the second (and last) iteration of the outer loop is what will give us
 	# the values we need to continue with the bulk of the simulation.
 	for i in range(num_parcels):
-		old_velocity_halves[i,0] = momentum_balance(i, half_step_x, half_step_u, half_step_d, 0, parcel_mass, g, p_press,\
-		 												 p_vsound, sr, visc_a, visc_b, K, delta, initial_parcel_distance, num_parcels)
-		old_velocity_halves[i,1] = momentum_balance(i, half_step_x, half_step_u, half_step_d, 1, parcel_mass, g, p_press,\
-		 												 p_vsound, sr, visc_a, visc_b, K, delta, initial_parcel_distance, num_parcels)
-		old_position_halves[i,0] = mon_cor(i, half_step_x, half_step_u, half_step_d, 0, mc, parcel_mass, sr)
-		old_position_halves[i,1] = mon_cor(i, half_step_x, half_step_u, half_step_d, 1, mc, parcel_mass, sr)
+		neighbors = neighbor_list(coordinates[i,0], coordinates[i,1], linked_cell, rightmost_cell, highest_cell, sr)
+		old_velocity_halves[i,0] = momentum_balance(i, half_step_x, half_step_u, half_step_d, 0, parcel_mass, g, p_press, p_vsound,\
+		 											sr, visc_a, visc_b, K, delta, initial_parcel_distance, num_parcels, neighbors)
+		old_velocity_halves[i,1] = momentum_balance(i, half_step_x, half_step_u, half_step_d, 1, parcel_mass, g, p_press, p_vsound,\
+		 											sr, visc_a, visc_b, K, delta, initial_parcel_distance, num_parcels, neighbors)
+		old_position_halves[i,0] = mon_cor(i, half_step_x, half_step_u, half_step_d, 0, mc, parcel_mass, sr, neighbors)
+		old_position_halves[i,1] = mon_cor(i, half_step_x, half_step_u, half_step_d, 1, mc, parcel_mass, sr, neighbors)
 		old_density_halves[i] = density_update(i, half_step_x, half_step_u, parcel_mass, sr)
 
 	for i in range(num_parcels):
@@ -330,26 +495,29 @@ for n in range(2):
 	p_vsound[:] = sound_speed_update(p_vsound, half_step_d, bulk_density, B, gamma)
 
 	for i in range(num_parcels):
-		euler_velocity_func[i,0] = momentum_balance(i, half_step_x, half_step_u, half_step_d, 0, parcel_mass, g, p_press,\
-		 												 p_vsound, sr, visc_a, visc_b, K, delta, initial_parcel_distance, num_parcels)
-		euler_velocity_func[i,1] = momentum_balance(i, half_step_x, half_step_u, half_step_d, 1, parcel_mass, g, p_press,\
-		 												 p_vsound, sr, visc_a, visc_b, K, delta, initial_parcel_distance, num_parcels)
-		euler_position_func[i,0] = mon_cor(i, half_step_x, half_step_u, half_step_d, 0, mc, parcel_mass, sr)
-		euler_position_func[i,1] = mon_cor(i, half_step_x, half_step_u, half_step_d, 1, mc, parcel_mass, sr)
+		neighbors = neighbor_list(coordinates[i,0], coordinates[i,1], linked_cell, rightmost_cell, highest_cell, sr)
+		euler_velocity_func[i,0] = momentum_balance(i, half_step_x, half_step_u, half_step_d, 0, parcel_mass, g, p_press, p_vsound,\
+		 											sr, visc_a, visc_b, K, delta, initial_parcel_distance, num_parcels, neighbors)
+		euler_velocity_func[i,1] = momentum_balance(i, half_step_x, half_step_u, half_step_d, 1, parcel_mass, g, p_press, p_vsound,\
+		 											sr, visc_a, visc_b, K, delta, initial_parcel_distance, num_parcels, neighbors)
+		euler_position_func[i,0] = mon_cor(i, half_step_x, half_step_u, half_step_d, 0, mc, parcel_mass, sr, neighbors)
+		euler_position_func[i,1] = mon_cor(i, half_step_x, half_step_u, half_step_d, 1, mc, parcel_mass, sr, neighbors)
 		euler_density_func[i] = density_update(i, half_step_x, half_step_u, parcel_mass, sr)
 
 	p_vel[:num_parcels,:] += (h/4.) * (old_velocity_halves + euler_velocity_func)
 	coordinates[:num_parcels,:] += (h/4.) * (old_position_halves + euler_position_func)
 	p_dens[:num_parcels] += (h/4.) * (old_density_halves + euler_density_func)
-	p_press[:] = pressure_update(p_press, p_dens, bulk_density, B, gamma)      # Don't actually need to update these now for next time step
-	p_vsound[:] = sound_speed_update(p_vsound, p_dens, bulk_density, B, gamma) # but do so to display the proper data
+	p_press[:] = pressure_update(p_press, p_dens, bulk_density, B, gamma)      # Don't actually need to update these now for next
+	p_vsound[:] = sound_speed_update(p_vsound, p_dens, bulk_density, B, gamma) # time step, but do so to display the proper data
 
+	linked_cell = update_cells(coordinates, linked_cell, rightmost_cell, highest_cell, num_parcels, sr)
 
-
+# Now that that first step is done...
 # Continue simulation for subsequent states using predictor-corrector method
 for n in range(t_steps):
 	# Update neighbor lists here, if implemented
-	
+
+
 	# Update half steps
 	for i in range(num_parcels):
 		# Velocity half step
@@ -371,13 +539,14 @@ for n in range(t_steps):
 
 	# Update old function halves
 	for i in range(num_parcels):
-		old_velocity_halves[i,0] = momentum_balance(i, half_step_x, half_step_u, half_step_d, 0, parcel_mass, g, p_press,\
-	 												 p_vsound, sr, visc_a, visc_b, K, delta, initial_parcel_distance, num_parcels)
-		old_velocity_halves[i,1] = momentum_balance(i, half_step_x, half_step_u, half_step_d, 1, parcel_mass, g, p_press,\
-	 												 p_vsound, sr, visc_a, visc_b, K, delta, initial_parcel_distance, num_parcels)
+		neighbors = neighbor_list(coordinates[i,0], coordinates[i,1], linked_cell, rightmost_cell, highest_cell, sr)
+		old_velocity_halves[i,0] = momentum_balance(i, half_step_x, half_step_u, half_step_d, 0, parcel_mass, g, p_press, p_vsound,\
+	 												sr, visc_a, visc_b, K, delta, initial_parcel_distance, num_parcels, neighbors)
+		old_velocity_halves[i,1] = momentum_balance(i, half_step_x, half_step_u, half_step_d, 1, parcel_mass, g, p_press, p_vsound,\
+	 												sr, visc_a, visc_b, K, delta, initial_parcel_distance, num_parcels, neighbors)
 
-		old_position_halves[i,0] = mon_cor(i, half_step_x, half_step_u, half_step_d, 0, mc, parcel_mass, sr)
-		old_position_halves[i,1] = mon_cor(i, half_step_x, half_step_u, half_step_d, 1, mc, parcel_mass, sr)
+		old_position_halves[i,0] = mon_cor(i, half_step_x, half_step_u, half_step_d, 0, mc, parcel_mass, sr, neighbors)
+		old_position_halves[i,1] = mon_cor(i, half_step_x, half_step_u, half_step_d, 1, mc, parcel_mass, sr, neighbors)
 
 		old_density_halves[i] = density_update(i, half_step_x, half_step_u, parcel_mass, sr)
 
@@ -386,16 +555,17 @@ for n in range(t_steps):
 	p_vel[:num_parcels,:] += h * old_velocity_halves
 	coordinates[:num_parcels,:] += h * old_position_halves
 	p_dens[:num_parcels] += h * old_density_halves
-	p_press[:] = pressure_update(p_press, p_dens, bulk_density, B, gamma)      # Don't actually need to update these now for next time step
-	p_vsound[:] = sound_speed_update(p_vsound, p_dens, bulk_density, B, gamma) # but do so to display the proper data
+	p_press[:] = pressure_update(p_press, p_dens, bulk_density, B, gamma)      # Don't actually need to update these now for next
+	p_vsound[:] = sound_speed_update(p_vsound, p_dens, bulk_density, B, gamma) # time step, but do so to display the proper data
 
+	linked_cell = update_cells(coordinates, linked_cell, rightmost_cell, highest_cell, num_parcels, sr)
 
 	# Every 5 iterations, take a snapshot of the parcel positions to be used for the animation
-	if n % 2 == 0:
+	if n % 10 == 0:
 		img.append([plt.scatter(coordinates[:,0], coordinates[:,1], c=p_press[:], cmap=cm.magma, \
 								vmin=initial_pr_top, vmax=initial_pr_bottom, marker='o')])
 
-	if n % 50 == 0:	
+	if n % 50 == 0:
 		print('\n')
 		print(n)
 		print('{0:50s} {1:50s}'.format(str(coordinates[0,:]), str(coordinates[num_parcels-1,:])))
